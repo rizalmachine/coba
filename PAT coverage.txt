@@ -1,0 +1,242 @@
+library(RODBC)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(foreach)
+library(doParallel)
+library(RPostgreSQL)
+library(reticulate)
+library(xml2)
+library(readxl)
+library(writexl)
+library(stringr)
+library(lubridate)
+
+setwd("C:/Users/00030557/Documents/File Strategic Planning/202501")
+getwd()
+
+#Rapihin data plantation productivity untuk grafik
+plantation_productivity <- read_xlsx("PAT 2020-2025.xlsx")
+plantation_productivity <- plantation_productivity %>% filter(Species %in% c ('ACRA', 'AMAN', 'EPEL'))
+plantation_productivity$Invent_Date <- as.Date(plantation_productivity$Invent_Date, format = "%Y-%m-%d")
+
+#tambah kolom SMF dengan isi "Overall" untuk membuat grafik species Overall
+plantation_productivity$SMF <- "Overall"
+plantation_productivity$Facet <- "By Year"
+
+#Buat Per month untuk 2024 dan 2025 
+plantation_productivity_2024 <- plantation_productivity %>%
+  filter(Period %in% c('Y2024','Y2025')) %>%
+  mutate(
+    bulan = case_when(
+      Period == 'Y2024' ~ paste(month.abb[month(Invent_Date)], "24", sep = ""),
+      Period == 'Y2025' ~ paste(month.abb[month(Invent_Date)], "25", sep = "")),
+    Facet = "By Month", Period = bulan) %>%
+  select(-bulan)
+
+plantation_productivity <- bind_rows(plantation_productivity, plantation_productivity_2024)
+
+write_xlsx(plantation_productivity, "plantation_productivity_final.xlsx")
+
+#### Jika mau ubah excel SS, maka perhatikan kolom-kolom berikut:
+#### "keyid", "rotation","districtna", "plant_date", "region","siteclass","species", "luasnet", "PAT_TYPE"
+target2025_06_12_36 <- function(file_path, filter_month, filter_year, pat_type) {
+  data <- read_excel(file_path) %>%
+    select(keyid, rotation, districtna, plant_date, region, siteclass, species, luasnet) %>%
+    mutate(
+      plant_date = as.Date(plant_date, format = "%Y-%m-%d"),
+      bulan = month(plant_date),
+      tahun = year(plant_date)) %>%
+    filter(bulan == filter_month & tahun == filter_year) %>%
+    mutate(
+      Target = 'Y2025',
+      PAT_TYPE = pat_type) %>%
+    select(-bulan, -tahun)
+  
+  var_name <- paste0("target_2025_", substr(pat_type, nchar(pat_type)-1, nchar(pat_type)))
+  
+  assign(var_name, data, envir = .GlobalEnv)
+}
+
+# Sumber data dan kriteria
+target2025_06_12_36("end2023.xlsx", 1, 2022, "PAT36")
+target2025_06_12_36("end2024Dec.xlsx", 1, 2024, "PAT12")
+target2025_06_12_36("end2024Dec.xlsx", 7, 2024, "PAT06")
+
+#Every time mau ngulang yang 2024, harus dikembaliin dulu pakai 2024 yang lama
+target_2020_2024 <- function(file_path, year) {
+  data <- read_excel(file_path) %>%
+    select(keyid, rotation, districtna, plant_date, region, siteclass, species, luasnet, PAT_TYPE) %>%
+    mutate(Target = paste0("Y", year))
+  
+  return(data)
+}
+
+# Pemanggilan data excel 2020. 2021, 2022, 2023, 2024
+years <- 2020:2025
+lapply(years, function(year) {
+  data <- target_2020_2024(paste0(year, ".xlsx"), year)
+  var_name <- paste0("target_", year)
+  assign(var_name, data, envir = .GlobalEnv)
+})
+
+# Membaca data tambahan (Region, SCGroup, dbpat)
+region <- read_excel("Region.Xlsx")
+SCGroup <- read_excel("SCGroup.Xlsx")
+dbpat <- read_excel("dbpat.Xlsx")
+
+# Kombinasi data dari tahun 2024
+target_2025 <- bind_rows(2025,target_2025_06, target_2025_12, target_2025_36)
+
+# Menulis output ke file Excel
+write_xlsx(target_2025, "2025.xlsx")
+
+# Fungsi untuk menggabungkan region dan SCGroup ke dataset target
+all_target <- function(target_data, region_data, scgroup_data) {
+  target_data <- target_data %>%
+    left_join(region_data, by = "region") %>%
+    left_join(scgroup_data, by = c("species", "siteclass", "BU")) %>%
+    mutate(
+      SCGroup = paste0(species, " SC ", SCGroup),
+      plant_date = as.Date(plant_date, format = "%Y-%m-%d"))
+  return(target_data)
+}
+
+# Menggunakan fungsi all_target untuk setiap tahun target
+target_2020 <- all_target(target_2020, region, SCGroup)
+target_2021 <- all_target(target_2021, region, SCGroup)
+target_2022 <- all_target(target_2022, region, SCGroup)
+target_2023 <- all_target(target_2023, region, SCGroup)
+target_2024 <- all_target(target_2024, region, SCGroup)
+target_2025 <- all_target(target_2025, region, SCGroup)
+
+# Fungsi untuk membuat per periode data berdasarkan PAT12 & PAT36
+final_target <- function(target_data, year_suffix) {
+  target_data <- target_data %>%
+    filter(PAT_TYPE %in% c('PAT12', 'PAT36')) %>%
+    mutate(
+      bulan = month(plant_date),
+      bulan = case_when(
+        bulan == 1 ~ paste0("Jan", year_suffix),
+        bulan == 2 ~ paste0("Feb", year_suffix),
+        bulan == 3 ~ paste0("Mar", year_suffix),
+        bulan == 4 ~ paste0("Apr", year_suffix),
+        bulan == 5 ~ paste0("May", year_suffix),
+        bulan == 6 ~ paste0("Jun", year_suffix),
+        bulan == 7 ~ paste0("Jul", year_suffix),
+        bulan == 8 ~ paste0("Aug", year_suffix),
+        bulan == 9 ~ paste0("Sep", year_suffix),
+        bulan == 10 ~ paste0("Oct", year_suffix),
+        bulan == 11 ~ paste0("Nov", year_suffix),
+        bulan == 12 ~ paste0("Dec", year_suffix),
+        TRUE ~ as.character(bulan)
+      ),
+      Target = bulan
+    ) %>%
+    select(-bulan)
+  
+  return(target_data)
+}
+
+# Menggunakan fungsi final_target untuk data tahun 2023 - 2025
+target_2023_2 <- final_target(target_2023, "23")
+target_2024_2 <- final_target(target_2024, "24")
+target_2025_2 <- final_target(target_2025, "25")
+
+# Fungsi untuk membuat per periode data berdasarkan PAT06
+final_target2 <- function(target_data, year_suffix) {
+  target_data <- target_data %>%
+    filter(PAT_TYPE == "PAT06") %>%
+    mutate(
+      bulan = month(plant_date),
+      bulan = case_when(
+        bulan == 1 ~ paste0("Jul", year_suffix),
+        bulan == 2 ~ paste0("Aug", year_suffix),
+        bulan == 3 ~ paste0("Sep", year_suffix),
+        bulan == 4 ~ paste0("Oct", year_suffix),
+        bulan == 5 ~ paste0("Nov", year_suffix),
+        bulan == 6 ~ paste0("Dec", year_suffix),
+        bulan == 7 ~ paste0("Jan", year_suffix),
+        bulan == 8 ~ paste0("Feb", year_suffix),
+        bulan == 9 ~ paste0("Mar", year_suffix),
+        bulan == 10 ~ paste0("Apr", year_suffix),
+        bulan == 11 ~ paste0("May", year_suffix),
+        bulan == 12 ~ paste0("Jun", year_suffix),
+        TRUE ~ as.character(bulan)
+      ),
+      Target = bulan
+    ) %>%
+    select(-bulan)
+  
+  return(target_data)
+}
+
+# Menggunakan fungsi final_target2 untuk data tahun 2023 - 2025
+target_2023_3 <- final_target2(target_2023, "23")
+target_2024_3 <- final_target2(target_2024, "24")
+target_2025_3 <- final_target2(target_2025, "25")
+
+#Merge all of the target
+target_all <- bind_rows(target_2020, target_2021, target_2022, target_2023, target_2024, target_2025, target_2023_2, target_2023_3, target_2024, target_2024_2, target_2024_3, target_2025_2, target_2025_3)
+
+target_all <- target_all %>%
+  mutate(species = ifelse(species == "AHIB", "AMAN", species))
+
+#filter cuma species ACRA, EPEL, AMAN
+target_all <- target_all %>% filter(species %in% c ('ACRA','EPEL','AMAN'))
+
+# Buat UniqID dan kolom Result
+target_all <- target_all %>%
+  mutate(
+    UniqID = paste0(keyid, rotation, PAT_TYPE),
+    Result = ifelse(UniqID %in% dbpat$UniqID, "Yes", "No"))
+
+# Fungsi untuk menghitung persentase
+calculate_percentage <- function(data, group_cols) {
+  data %>%
+    group_by(across(all_of(group_cols))) %>%
+    summarize(
+      YesLuasnet = sum(luasnet[Result == "Yes"]),
+      AllLuasnet = sum(luasnet),
+      Percentage = sprintf("%d%%", round((YesLuasnet / AllLuasnet) * 100)),
+      .groups = "drop"
+    ) %>%
+    select(-YesLuasnet, -AllLuasnet)
+}
+
+# Menghitung persentase berdasarkan kategori yang berbeda
+result <- calculate_percentage(target_all, c("species", "PAT_TYPE", "BU", "Target"))
+result_2 <- calculate_percentage(target_all, c("SCGroup", "PAT_TYPE", "Target", "BU"))
+result_3 <- calculate_percentage(target_all, c("species", "PAT_TYPE", "Target")) %>%
+  mutate(SMF = "Overall")
+result_5 <- calculate_percentage(target_all, c("PAT_TYPE", "BU", "Target"))
+result_6 <- calculate_percentage(target_all, c("PAT_TYPE", "Target")) %>%
+  mutate(SMF = "Overall")
+
+# Filter SCGroup khusus dan hitung persentase
+target_all_1 <- target_all %>%
+  filter(SCGroup %in% c("ACRA SC Other", "AMAN SC Other", "EPEL SC Other"))
+
+result_4 <- calculate_percentage(target_all_1, c("SCGroup", "PAT_TYPE", "Target")) %>%
+  mutate(SMF = "Overall")
+
+# Gabungkan semua hasil
+target_all <- bind_rows(result, result_2, result_3, result_4, result_5, result_6)
+
+# Ubah nama kolom sesuai format yang diinginkan
+colnames(target_all) <- c("Species", "PAT_Type", "Region", "Period",  "Percent", "SC_Grp", "SMF")
+
+# Ubah SCGroup sesuai kebutuhan
+target_all <- target_all %>%
+  mutate(SC_Grp = recode(SC_Grp,
+                         "ACRA SC Other" = "ACRA Other SC",
+                         "EPEL SC Other" = "EPEL Other SC",
+                         "AMAN SC Other" = "AMAN Other SC"))
+
+# Simpan hasil ke file Excel
+write_xlsx(target_all, "pat_coverage_endJan25.xlsx")
+
+
+
+

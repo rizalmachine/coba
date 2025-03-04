@@ -1,0 +1,2021 @@
+library(ggplot2)
+library(tidyr)
+library(RColorBrewer)
+library(stringr)
+library(RODBC)
+library(readr)
+library(dplyr)
+library(sf)
+library(data.table)
+library(foreach)
+library(doParallel)
+library(RPostgreSQL)
+library(reticulate)
+library(xml2)
+library(readxl)
+library(writexl)
+library(stringr)
+library(rlang)
+
+
+Target_40T_SCMH_ACRA = 2.3
+Target_40T_SCMH_EPEL = 2.5
+Target_40T_CAI_ACRA = 22.1
+Target_40T_CAI_EPEL = 19.2
+Target_40T_MAI_ACRA = 39.0
+Target_40T_MAI_EPEL = 36.9
+
+Target_40T_SCMH_AMAN = 100 
+Target_40T_CAI_AMAN = 100
+Target_40T_MAI_AMAN = 100
+
+Target_SWS_SCMH_ACRA = 2.1
+Target_SWS_SCMH_EPEL = 2.3
+Target_SWS_CAI_ACRA = 16.0
+Target_SWS_CAI_EPEL = 14.5
+Target_SWS_MAI_ACRA = 32.1
+Target_SWS_MAI_EPEL = 25.6
+
+Target_SWS_SCMH_AMAN = 100
+Target_SWS_CAI_AMAN = 100
+Target_SWS_MAI_AMAN = 100
+
+setwd("C:/Users/00029641/OneDrive - PT. Global Komunikasi Mandiri/Documents/MY FOLDER/SHARE DOCUMENTS/Plantation Productivity/202501")
+getwd()
+
+INVENTORY <- read_xlsx("plantation_productivity_final.xlsx")
+PAT_COVERAGE <- read_excel("pat_coverage_endJan25.Xlsx", 
+                           col_types = rep("text", 7))
+
+#BY SPECIES, BY REGION, BY PERIOD
+### Filter data Invent
+
+INVENT <- INVENTORY %>%
+  filter(Facet == "By Year", 
+         PAT_Type %in% c("PAT36", "PAT12", "PAT06"), 
+         Species %in% c("ACRA", "AMAN", "EPEL")) %>%
+  mutate(Region = factor(Region, levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng")),
+         Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")))
+
+# Data Coverage
+COVERAGE <- PAT_COVERAGE %>%
+  filter(is.na(SC_Grp), is.na(SMF), Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")) %>%
+  mutate(Region = ifelse(Region == "JAMBI WKS", "Jambi WKS", str_to_title(Region)))
+
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type","Period", "Species"), all.x = TRUE) 
+
+# Daftar spesies yang tersedia dalam data
+species_list <- unique(INVENT$Species)
+
+#SCMH, HEIGHT, STOCKING PAT06
+# Fungsi untuk membuat plot berdasarkan metrik (SCMH, Height, Stocking)
+plot_species_data <- function(data, species, y_col, y_label, y_limits, hline_targets = NULL, plot_title_suffix = "", label_y_col = 5) {
+  # Filter data untuk spesies tertentu
+  data_filtered <- data %>%
+    filter(PAT_Type == "PAT06", Species == species)
+  
+  # Buat boxplot dengan label
+  plot <- ggplot(data_filtered, aes(x = Region, y = !!sym(y_col), fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Region Group",
+         y = y_label,
+         title = paste("PAT06", plot_title_suffix, species, "Jan20 - Jan25"))
+  
+  # Tambahkan garis target jika ada
+  if (!is.null(hline_targets)) {
+    for (target in hline_targets) {
+      plot <- plot + geom_hline(aes(yintercept = !!sym(target$column)), color = target$color, linetype = target$linetype, size = 0.5)
+    }
+  }
+  
+  # Tambahkan label pada setiap periode
+  labels_data <- data_filtered %>%
+    distinct(Region, PAT_Type, Period, Species, .keep_all = TRUE)
+  
+  # Pastikan label muncul dalam batas plot dengan y sesuai parameter label_y_col
+  plot_with_labels <- plot +
+    geom_text(data = labels_data, aes(x = Region, label = Percent, y = label_y_col, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue")
+  
+  # Menyimpan plot sebagai PNG dengan nama file berdasarkan spesies
+  filename <- paste0("P06_", toupper(y_col), "_", gsub(" ", "_", species), "_ByYear.png")
+  ggsave(filename, plot_with_labels, width = 13.398, height = 5.56, dpi = 400)
+}
+
+# Loop melalui setiap spesies
+for (species in species_list) {
+  # List target untuk SCMH (jika diperlukan)
+  scmh_targets <- list(
+    list(column = paste0("Target_SWS_SCMH_", species), color = "red", linetype = "solid"),
+    list(column = paste0("Target_40T_SCMH_", species), color = "green", linetype = "dashed")
+  )
+  
+  # Plot SCMH (menggunakan y = 5 untuk label)
+  plot_species_data(merged_data, species, "SCMH", "Stocking X MH", c(0, 5), scmh_targets, "Stocking X Mean Height", label_y_col = 5)
+  
+  # Plot Height (menggunakan y = 5 untuk label)
+  plot_species_data(merged_data, species, "MH", "Height (m)", c(0, 5), plot_title_suffix = "Height", label_y_col = 5)
+  
+  # Plot Stocking (menggunakan y = 120 untuk label)
+  plot_species_data(merged_data, species, "Stocking", "Stocking (%)", c(80, 120), plot_title_suffix = "Stocking", label_y_col = 120)
+}
+
+#CAI PAT12
+# Loop melalui setiap species
+merged_data <- as.data.table(merged_data)
+
+# Definisikan fungsi untuk membuat dan menyimpan plot
+create_and_save_plot <- function(species, data, target_SWS, target_40T) {
+  plot <- ggplot(data, aes(x = Region, y = CAI, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 40)) +
+    geom_hline(yintercept = target_40T, color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(yintercept = target_SWS, color = "red", linetype = "solid", size = 0.5) +
+    labs(x = "Region Group",
+         y = "CAI (m3/ha/year)",
+         title = paste("PAT12 CAI (m3/ha/year)", species, "Jan20 - Jan25"))
+  
+  # Menyaring data label
+  label_species <- unique(data[, .(Region, PAT_Type, Period, Species, Percent)][PAT_Type == "PAT12" & Species == species])
+  
+  plot_with_labels <- plot +
+    geom_text(data = label_species, aes(x = Region, label = Percent, y = 40, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+  
+  # Menentukan ukuran plot
+  plot_size <- c(13.398, 5.56)  # Ukuran dalam satuan inchi
+  
+  # Menyimpan plot sebagai PNG
+  filename <- paste0("P12_CAI_", species, "_ByYear.png")
+  ggsave(filename, plot = plot_with_labels, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+# Loop melalui setiap spesies
+for (species in species_list) {
+  # Filter data spesies
+  PAT12_species <- merged_data[PAT_Type == "PAT12" & Species == species]
+  
+  # Mendapatkan nama kolom Target_SWS_SCMH untuk spesies saat ini
+  target_SWS <- get(paste0("Target_SWS_CAI_", species))
+  target_40T <- get(paste0("Target_40T_CAI_", species))
+  
+  # Buat dan simpan plot
+  create_and_save_plot(species, PAT12_species, target_SWS, target_40T)
+}
+
+INVENT <- INVENTORY %>%
+  filter(Facet == "By Year", 
+         PAT_Type %in% c("PAT36","PAT12","PAT06"), 
+         Species %in% c("ACRA","EPEL")) %>%
+  mutate(Region = factor(Region, levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng")),
+         Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")))
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type","Period", "Species"), all.x = TRUE) 
+species_list <- c("ACRA","EPEL")
+
+#MAI_PAT36
+for (species in species_list) {
+  PAT36_species <- merged_data %>%
+    filter(PAT_Type == "PAT36", Species == species)
+  
+  # Mendapatkan nama kolom Target_SWS_SCMH untuk spesies saat ini
+  target_SWS <- paste("Target_SWS_MAI_", species, sep = "")
+  target_40T <- paste("Target_40T_MAI_", species, sep = "")
+
+  
+  # Buat boxplot dengan label
+  plot <- ggplot(PAT36_species, aes(x = Region, y = MAITob, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 60)) +
+    geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x = "Region Group",
+         y = "MAI Tsob/ha/yr",
+         title = paste("PAT36 MAI (Tsob/ha/yr)", species, "Jan20 - Jan25"))
+  
+  sep <- distinct(merged_data, Region, PAT_Type, Period, Species, .keep_all = TRUE)
+  label_species <- sep %>% filter(PAT_Type == "PAT36", Species == species)
+  
+  plot_with_labels <- plot +
+    geom_text(data = label_species, aes(x = Region, label = Percent, y = 60, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+  
+  # Menentukan ukuran plot
+  plot_size <- c(13.398, 5.56)  # Ukuran dalam satuan inchi
+  
+  # Menyimpan plot sebagai PNG
+  filename <- paste("P36_MAI_", species, "_ByYear.png", sep = "")
+  ggsave(filename, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+INVENT <- INVENTORY %>%
+  filter(Facet == "By Year", 
+         PAT_Type %in% c("PAT36", "PAT12", "PAT06"), 
+         Species == "AMAN",
+         Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")) %>%
+  mutate(Region = factor(Region, levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng")),
+         Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")))
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type","Period", "Species"), all.x = TRUE) 
+
+#MAI_PAT36
+for (species in "AMAN") {
+  PAT36_species <- merged_data %>%
+    filter(PAT_Type == "PAT36", Species == species)
+  
+  # Mendapatkan nama kolom Target_SWS_SCMH untuk spesies saat ini
+  target_SWS <- paste("Target_SWS_MAI_", species, sep = "")
+  target_40T <- paste("Target_40T_MAI_", species, sep = "") 
+  
+  # Buat boxplot dengan label
+  plot <- ggplot(PAT36_species, aes(x = Region, y = MAITob, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 60)) +
+    geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x = "Region Group",
+         y = "MAI Tsob/ha/yr",
+         title = paste("PAT36 MAI (Tsob/ha/yr)", species, "Jan20 - Jan25"))
+  
+  sep <- distinct(merged_data, Region, PAT_Type, Period, Species, .keep_all = TRUE)
+  label_species <- sep %>% filter(PAT_Type == "PAT36", Species == species)
+  
+  plot_with_labels <- plot +
+    geom_text(data = label_species, aes(x = Region, label = Percent, y = 60, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 3, color = "darkblue", fontface = "bold")
+  
+  # Menentukan ukuran plot
+  plot_size <- c(13.398, 5.56)  # Ukuran dalam satuan inchi
+  
+  # Menyimpan plot sebagai PNG
+  filename <- paste("P36_MAI_", species, "_ByYear.png", sep = "")
+  ggsave(filename, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+#BY SPECIES, BY REGION, BY MONTH
+#Per month per species
+###data Invent as end of Nov 23 filter
+INVENT <- INVENTORY %>%
+  mutate(Region = factor(Region, levels = c("Riau", "Jambi WKS", "Muba", "Palembang", "Kalbar", "Kaltim", "Kalteng")),
+         Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025","Jan24","Feb24","Mar24",
+                                            "Apr24","May24","Jun24","Jul24","Aug24","Sep24","Oct24","Nov24","Dec24","Jan25"))) %>%
+  filter(PAT_Type %in% c("PAT36", "PAT12", "PAT06"), 
+         Species %in% c("ACRA", "AMAN", "EPEL"),
+         !(Period %in% c("Jan24")))
+
+# Step 2: Prepare the COVERAGE dataset
+COVERAGE <- PAT_COVERAGE %>%
+  filter(!is.na(SC_Grp), !is.na(SMF), !(Period %in% c("Jan24"))) %>%
+  mutate(Region = ifelse(Region == "JAMBI WKS", "Jambi WKS", str_to_title(Region)))
+
+# Step 3: Merge the INVENT and COVERAGE datasets
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type", "Period", "Species"), all.x = TRUE)  
+
+# Step 4: Convert 'Percent' column to factor
+merged_data$Percent <- factor(merged_data$Percent)
+
+# Step 5: Generate plots for each species
+species_list <- unique(merged_data$Species)
+
+# Step 6: Define a function to create plots
+create_plot <- function(data, species, y_var, y_label, judul, y_limits, file_prefix, target_prefix = NULL) {
+  plot <- ggplot(data, aes(x = Region, y = !!sym(y_var), fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Region Group",
+         y = y_label,
+         title = paste("PAT06", judul, species))
+  
+  if (!is.null(target_prefix)) {
+    target_SWS <- paste(target_prefix, species, sep = "")
+    target_40T <- paste(target_prefix, species, sep = "")
+    
+    plot <- plot +
+      geom_hline(aes(yintercept = !!sym(target_SWS)), color = "green", linetype = "dashed", size = 0.5) +
+      geom_hline(aes(yintercept = !!sym(target_40T)), color = "red", linetype = "solid", size = 0.5)
+  }
+  
+  filename <- paste(file_prefix, species, "_ByMonth.png", sep = "")
+  ggsave(filename, plot, width = 25.8, height = 6, dpi = 400)
+}
+
+for (species in species_list) {
+  PAT06_species <- merged_data %>%
+    filter(PAT_Type == "PAT06", Species == species)
+  
+  # Plot Height
+  create_plot(PAT06_species, species, "MH", "Height (m)", "Height", c(0, 5), "P06_MH_")
+  
+  # Plot Stocking
+  create_plot(PAT06_species, species, "Stocking", "Stocking (%)", "Stocking", c(80, 120), "P06_Stocking_")
+}
+
+#SCMH
+for (species in species_list) {
+  PAT06_species <- merged_data %>%
+    filter(PAT_Type == "PAT06", Species == species)
+  
+  # Mendapatkan nama kolom Target_SWS_SCMH untuk spesies saat ini
+  target_SWS <- paste("Target_SWS_SCMH_", species, sep = "")
+  target_40T <- paste("Target_40T_SCMH_", species, sep = "")
+  
+  plot <- ggplot(PAT06_species, aes(x = Region, y = SCMH, fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 5)) +
+    geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x = "Region Group",
+         y = "Stocking X MH",
+         title = paste("PAT06 Stocking X Mean Height", species))
+  
+  # Menentukan ukuran plot
+  plot_size <- c(25.8, 6)  # Ukuran dalam satuan inchi
+  
+  # Menyimpan plot sebagai PNG
+  filename <- paste("P06_SCMH_", species, "_ByMonth.png", sep = "")
+  ggsave(filename, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+create_plot_CAI <- function(data, species) {
+  target_SWS <- paste("Target_SWS_CAI_", species, sep = "")
+  target_40T <- paste("Target_40T_CAI_", species, sep = "")
+  
+  plot <- ggplot(data, aes(x = Region, y = CAI, fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 40)) +
+    geom_hline(aes(yintercept = !!sym(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!sym(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x = "Region Group",
+         y = "CAI (m3/ha/year)",
+         title = paste("PAT12 CAI (m3/ha/year)", species))
+  
+  ggsave(paste0("P12_CAI_", species, "_ByMonth.png"), plot, width = 25.8, height = 6, dpi = 400)
+}
+
+# Loop untuk menghasilkan plot CAI untuk PAT12
+for (species in species_list) {
+  data_filtered <- merged_data %>% filter(PAT_Type == "PAT12", Species == species)
+  create_plot_CAI(data_filtered, species)
+}
+
+
+#BY SPECIES, BY PERIOD YEAR, OVERALL
+#Overall
+###data Invent as end of Sep 23 filter
+INVENT <- INVENTORY %>%
+  filter(Facet == "By Year",
+         PAT_Type %in% c("PAT36", "PAT12", "PAT06"),
+         Species %in% c("ACRA","EPEL")) %>%
+  mutate(Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")))
+
+# Proses data COVERAGE
+COVERAGE <- PAT_COVERAGE %>%
+  mutate(Region = ifelse(Region == "JAMBI WKS", "Jambi WKS", str_to_title(Region))) %>%
+  filter(is.na(SC_Grp) & is.na(Region) & Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+
+# Merge data INVENT dengan COVERAGE
+merged_data <- merge(INVENT, COVERAGE, by = c("PAT_Type","Period", "Species"), all.x = TRUE)
+
+# Ubah Percent menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent)
+
+# Daftar spesies yang tersedia dalam data
+species_list <- unique(INVENT$Species)
+
+#Untuk PAT36
+for (species in species_list) {
+  # Filter data untuk species tertentu
+  PAT36_SPECIES <- INVENT %>% filter(PAT_Type == "PAT36", Species == species)
+  
+  # Mendapatkan nama kolom target
+  target_SWS <- paste0("Target_SWS_MAI_", species)
+  target_40T <- paste0("Target_40T_MAI_", species)
+  
+  # Buat plot dengan label
+  plot <- ggplot(PAT36_SPECIES, aes(x = Period, y = MAITob, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 60)) +
+    geom_hline(aes(yintercept = !!sym(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!sym(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x ="",
+         y = "MAI Tsob/ha/yr",
+         title = paste("Overall PAT36 for", species))
+  
+  # Tambahkan label pada setiap periode
+  label_data <- merged_data %>%
+    filter(PAT_Type == "PAT36", Species == species) %>%
+    distinct(Period, .keep_all = TRUE)
+  
+  plot <- plot +
+    geom_text(data = label_data, aes(label = Percent, y = 60, vjust = 0), 
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+  
+  # Simpan plot sebagai PNG
+  ggsave(paste0("OVERALL_P36_MAI_", species, "_ByYear.png"), plot, width = 5.5, height = 5.5, dpi = 400)
+}
+
+INVENT <- INVENTORY %>%
+  filter(Facet == "By Year",
+         Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"),
+         PAT_Type %in% c("PAT36", "PAT12", "PAT06"),
+         Species == "AMAN") %>%
+  mutate(Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")))
+
+# Merge data INVENT dengan COVERAGE
+merged_data <- merge(INVENT, COVERAGE, by = c("PAT_Type","Period", "Species"), all.x = TRUE)
+
+# Ubah Percent menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent)
+
+#Untuk PAT36
+for (species in species_list) {
+  # Filter data untuk species tertentu
+  PAT36_SPECIES <- INVENT %>% filter(PAT_Type == "PAT36", Species == "AMAN")
+  
+  # Mendapatkan nama kolom target
+  target_SWS <- paste0("Target_SWS_MAI_", "AMAN")
+  target_40T <- paste0("Target_40T_MAI_", "AMAN")
+  
+  # Buat plot dengan label
+  plot <- ggplot(PAT36_SPECIES, aes(x = Period, y = MAITob, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 60)) +
+    geom_hline(aes(yintercept = !!sym(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!sym(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x ="",
+         y = "MAI Tsob/ha/yr",
+         title = paste("Overall PAT36 for", "AMAN"))
+  
+  # Tambahkan label pada setiap periode
+  label_data <- merged_data %>%
+    filter(PAT_Type == "PAT36", Species == "AMAN") %>%
+    distinct(Period, .keep_all = TRUE)
+  
+  plot <- plot +
+    geom_text(data = label_data, aes(label = Percent, y = 60, vjust = 0), 
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+  
+  # Simpan plot sebagai PNG
+  ggsave(paste0("OVERALL_P36_MAI_", "AMAN", "_ByYear.png"), plot, width = 5.5, height = 5.5, dpi = 400)
+}
+
+INVENT <- INVENTORY %>%
+  filter(Facet == "By Year",
+         PAT_Type %in% c("PAT36", "PAT12", "PAT06"),
+         Species %in% c("ACRA", "AMAN", "EPEL")) %>%
+  mutate(Period = factor(Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")))
+merged_data <- merge(INVENT, COVERAGE, by = c("PAT_Type","Period", "Species"), all.x = TRUE)
+
+#PAT12 CAI
+# Loop melalui setiap species
+for (species in species_list) {
+  # Filter data untuk spesies tertentu
+  PAT12_SPECIES <- INVENT %>% filter(PAT_Type == "PAT12", Species == species)
+  
+  # Nama kolom target
+  target_SWS <- paste0("Target_SWS_CAI_", species)
+  target_40T <- paste0("Target_40T_CAI_", species)
+  
+  # Buat plot dengan label
+  plot <- ggplot(PAT12_SPECIES, aes(x = Period, y = CAI, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 40)) +
+    geom_hline(aes(yintercept = !!sym(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!sym(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x ="",
+         y = "CAI (m3/ha/yr)",
+         title = paste(species, "OVERALL PAT12"))
+  
+  # Tambahkan label pada setiap periode
+  label_data <- merged_data %>%
+    filter(PAT_Type == "PAT12", Species == species) %>%
+    distinct(Period, .keep_all = TRUE)
+  
+  plot <- plot +
+    geom_text(data = label_data, aes(label = Percent, y = 40), 
+              position = position_dodge(width = 0.8), size = 4, color = "darkblue", fontface = "bold")
+  
+  # Simpan plot sebagai PNG
+  ggsave(paste0("OVERALL_P12_CAI_", gsub(" ", "_", species), "_ByYear.png"), 
+         plot, width = 5.5, height = 5.5, dpi = 400)
+}
+
+#PAT06
+# Loop melalui setiap species
+plot_and_save <- function(data, species, metric, y_label, title_prefix, y_limits, target_40T = NULL, target_SWS = NULL, y_intercept = NULL) {
+  # Filter data untuk species tertentu
+  species_data <- data %>% filter(Species == species)
+  
+  # Buat plot
+  plot <- ggplot(species_data, aes(Period, !!sym(metric), fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Period",
+         y = y_label,
+         title = paste(species, title_prefix))
+  
+  # Tambahkan garis horizontal jika ada
+  if (!is.null(target_40T)) {
+    plot <- plot + geom_hline(aes(yintercept = !!sym(target_40T)), color = "green", linetype = "dashed", size = 0.5)
+  }
+  if (!is.null(target_SWS)) {
+    plot <- plot + geom_hline(aes(yintercept = !!sym(target_SWS)), color = "red", linetype = "solid", size = 0.5)
+  }
+  
+  # Tambahkan label pada setiap periode
+  label_data <- merged_data %>% filter(Species == species, PAT_Type == species_data$PAT_Type[1]) %>% distinct(Period, .keep_all = TRUE)
+  plot <- plot +
+    geom_text(data = label_data, aes(x = Period, label = Percent, y = y_intercept), 
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+  
+  # Simpan plot sebagai PNG
+  filename <- paste0("OVERALL_", species_data$PAT_Type[1], "_", metric, "_", gsub(" ", "_", species), "_ByYear.png")
+  ggsave(filename, plot, width = 5.5, height = 5.5, dpi = 400)
+}
+
+for (species in species_list) {
+  # SCMH plot
+  plot_and_save(INVENT %>% filter(PAT_Type == "PAT06"), species, "SCMH", "Stocking x MH", "OVERALL PAT06 SCMH", c(0, 5), 
+                target_40T = paste0("Target_40T_SCMH_", species), target_SWS = paste0("Target_SWS_SCMH_", species), y_intercept = 5)
+  
+  # MH plot
+  plot_and_save(INVENT %>% filter(PAT_Type == "PAT06"), species, "MH", "Height (m)", "OVERALL PAT06 MH", c(0, 5), y_intercept = 5)
+  
+  # Stocking plot
+  plot_and_save(INVENT %>% filter(PAT_Type == "PAT06"), species, "Stocking", "Stocking (%)", "OVERALL PAT06 Stocking", c(80, 120), y_intercept = 120)
+}
+
+
+
+#BY SPECIES, BY MONTH, OVERALL 
+#Overall Month
+###data Invent as end of Sep 23 filter
+INVENT <- INVENTORY
+
+#UBAH PERIOD#
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025","Jan24","Feb24","Mar24",
+                                                  "Apr24","May24","Jun24","Jul24","Aug24","Sep24","Oct24","Nov24","Dec24","Jan25"))
+INVENT <- INVENT %>% filter(PAT_Type %in% c("PAT36", "PAT12", "PAT06"))
+INVENT <- INVENT %>% filter(Species %in% c("ACRA", "AMAN", "EPEL"))
+#UBAH PERIOD#
+INVENT <- INVENT %>% filter(!(Period %in% c("Jan24"))) 
+
+###data coverage 
+COVERAGE <- PAT_COVERAGE
+COVERAGE$Region <- ifelse(COVERAGE$Region == "JAMBI WKS", "Jambi WKS", str_to_title(COVERAGE$Region))
+COVERAGE <- COVERAGE %>%
+  filter(is.na(SC_Grp) & is.na(Region))
+
+#UBAH PERIOD#
+COVERAGE <- COVERAGE %>% filter(!(Period %in% c("Jan24"))) 
+
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("PAT_Type","Period", "Species"), all.x = TRUE) 
+
+# Ubah Label menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent) 
+
+# Daftar spesies yang tersedia dalam data
+species_list <- unique(INVENT$Species)
+
+#PAT12 CAI
+# Loop melalui setiap species
+for (species in species_list) {
+  # Filter data untuk species tertentu
+  PAT12_SPECIES <- INVENT %>% filter(PAT_Type == "PAT12", Species == species)
+  
+  # Mendapatkan nama kolom Target_SWS_CAI untuk spesies saat ini
+  target_SWS <- paste("Target_SWS_CAI_", species, sep = "")
+  target_40T <- paste("Target_40T_CAI_", species, sep = "")
+  
+  # Buat boxplot dengan label
+  plot <- ggplot(PAT12_SPECIES, aes(Period, CAI, fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 40)) +
+    geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x = "",
+         y = "CAI (m3/ha/yr)",
+         title = paste(species, "CAI Overall PAT12"))
+  
+  # Tambahkan label pada setiap periode
+  sep <- distinct(merged_data, PAT_Type, Period, Species, .keep_all = TRUE)
+  labelPAT12_SPECIES_Overall <- sep %>% filter(PAT_Type == "PAT12", Species == species)
+  plot_with_labels <- plot +
+    geom_text(data = labelPAT12_SPECIES_Overall, aes(x = Period, label = Percent, y = 40, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 4, color = "darkblue", fontface = "bold")
+  
+  # Tampilkan plot
+  print(plot_with_labels)
+  
+  # Menentukan ukuran plot
+  plot_size <- c(12.38, 6)  # Ukuran dalam satuan inchi
+  
+  # Menyimpan plot sebagai PNG
+  filename <- paste("P12_CAI_Overall_", species, "_ByMonth.png", sep = "")
+  ggsave(filename, plot_with_labels, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+#PAT06
+plot_PAT06 <- function(species, measure, y_label, plot_title_suffix, y_limits, y_label_pos, file_suffix, add_hline = FALSE) {
+  PAT06_SPECIES <- INVENT %>% filter(PAT_Type == "PAT06", Species == species)
+  
+  plot <- ggplot(PAT06_SPECIES, aes(Period, !!as.name(measure), fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Period",
+         y = y_label,
+         title = paste(species, plot_title_suffix))
+  
+  # Conditionally add geom_hline based on the add_hline parameter
+  if (add_hline) {
+    target_SWS <- paste("Target_SWS_SCMH_", species, sep = "")
+    target_40T <- paste("Target_40T_SCMH_", species, sep = "")
+    
+    plot <- plot +
+      geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+      geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5)
+  }
+  
+  sep <- distinct(merged_data, PAT_Type, Period, Species, .keep_all = TRUE)
+  labelPAT06_SPECIES_Overall <- sep %>% filter(PAT_Type == "PAT06", Species == species)
+  plot_with_labels <- plot +
+    geom_text(data = labelPAT06_SPECIES_Overall, aes(x = Period, label = Percent, y = y_label_pos, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 4, color = "darkblue", fontface = "bold")
+  
+  print(plot_with_labels)
+  
+  filename <- paste("P06_", file_suffix, "_Overall_", species, "_ByMonth.png", sep = "")
+  ggsave(filename, plot_with_labels, width = 12.38, height = 6, dpi = 400)
+}
+
+# Call the function for each species, with geom_hline only added for SCMH:
+for (species in species_list) {
+  plot_PAT06(species, "SCMH", "Stocking x MH", "SCMH Overall PAT06", c(0, 5), 5, "SCMH", add_hline = TRUE)
+  plot_PAT06(species, "MH", "Height (m)", "MH Overall PAT06", c(0, 5), 5, "MH", add_hline = FALSE)
+  plot_PAT06(species, "Stocking", "Stocking (%)", "Stocking Overall PAT06", c(80, 120), 120, "Stocking", add_hline = FALSE)
+}
+
+
+#BY SITECLASS, SPECIES, BY YEAR
+INVENT <- INVENTORY %>%
+  filter(Period %in% c("Y2020", "Y2021", "Y2022", "Y2023", "Y2024","Y2025"))
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+sc_grp_values <- c("ACRA SC VI-VII", "EPEL SC I-V", "ACRA Marine Clay", "EPEL Marine Clay", "AMAN Marine Clay", "AMAN SC VI-VII", "AMAN SC I-V")
+INVENT <- INVENT %>% filter(Facet == "By Year", SC_Grp %in% sc_grp_values)
+
+COVERAGE <- PAT_COVERAGE %>%
+  mutate(Region = ifelse(Region == "JAMBI WKS", "Jambi WKS", str_to_title(Region)),
+         SC_Grp = case_when(SC_Grp == "ACRA SC Marine Clay" ~ "ACRA Marine Clay",
+                            SC_Grp == "EPEL SC Marine Clay" ~ "EPEL Marine Clay",
+                            SC_Grp == "AMAN SC Marine Clay" ~ "AMAN Marine Clay",
+                            TRUE ~ SC_Grp))
+
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type", "Period", "SC_Grp"), all.x = TRUE) %>%
+  mutate(Percent = factor(Percent))
+
+names(merged_data)[names(merged_data) == "Species.x"] <- "Species"
+
+
+# CAI PAT12
+# Loop melalui setiap sc_group dan species
+for (sc_group in sc_grp_values) {
+  PAT12_sc_group_CAI <- merged_data %>%
+    filter(PAT_Type == "PAT12", SC_Grp == sc_group)
+  
+  species_list <- unique(PAT12_sc_group_CAI$Species)
+  
+  for (species in species_list) {
+    target_SWS <- paste0("Target_SWS_CAI_", species)
+    target_40T <- paste0("Target_40T_CAI_", species)
+  }
+  
+  sep <- distinct(merged_data, Region, PAT_Type, Period, SC_Grp, .keep_all = TRUE) %>%
+    filter(PAT_Type == "PAT12", SC_Grp == sc_group)
+  
+  plot <- ggplot(PAT12_sc_group_CAI, aes(x = Region, y = CAI, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "", plot.title = element_text(hjust = 0.5), text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 40)) +
+    geom_hline(aes_string(yintercept = target_40T), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x ="", y = "CAI (m3/ha/yr)", title = paste(toupper(sc_group), " PAT12 CAI")) +
+    geom_text(data = sep, aes(x = Region, label = Percent, y = 40, vjust = 0, fontface = "bold"), 
+              position = position_dodge(width = ifelse(sc_group %in% c("ACRA Marine Clay", "EPEL Marine Clay", "AMAN Marine Clay"), 1, 0.8)), 
+              size = 4, color = "darkblue")
+  
+  plot
+  
+  plot_size <- if (sc_group %in% c("ACRA Marine Clay", "EPEL Marine Clay", "AMAN Marine Clay")) c(5.5, 5.5) else c(13.75, 5.5)
+  ggsave(paste0(sc_group, "_PAT12_CAI_ByYear.png"), plot = plot, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+# MAI PAT36
+# Loop melalui setiap sc_group dan species
+for (sc_group in sc_grp_values) {
+  PAT36_sc_group_MAI <- merged_data %>%
+    filter(PAT_Type == "PAT36", SC_Grp == sc_group)
+  species_list <- unique(PAT36_sc_group_MAI$Species)
+  
+  # Mendapatkan nama kolom Target_SWS_MAI untuk spesies saat ini
+  for (species in species_list) {
+    target_SWS <- paste("Target_SWS_MAI_", species, sep = "")
+    target_40T <- paste("Target_40T_MAI_", species, sep = "")
+  }
+  
+  # Buat boxplot dengan label
+  plot <- ggplot(PAT36_sc_group_MAI, aes(x = Region, y = MAITob, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 60)) +
+    geom_hline(aes_string(yintercept = target_40T), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+    geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5) +
+    labs(x = " ",
+         y = "MAI Tsob/ha/yr",
+         title = paste(toupper(sc_group), " PAT36 MAITob"))
+  
+  # Tambahkan label pada setiap periode
+  # Mengambil satu perwakilan dari setiap kombinasi unik
+  sep <- distinct(merged_data, Region, PAT_Type, Period, SC_Grp, .keep_all = TRUE)
+  labelPAT36_sc_group_MAI <- sep %>% filter(PAT_Type == "PAT36", SC_Grp == sc_group)
+  
+  # Menentukan ukuran plot berdasarkan kondisi SC_Grp
+  if (sc_group %in% c("ACRA Marine Clay", "EPEL Marine Clay", "AMAN Marine Clay")) {
+    plot_with_labels <- plot +
+      geom_text(data = labelPAT36_sc_group_MAI, aes(x = Region, label = Percent, y = 60, vjust = 0,fontface = "bold"),
+                position = position_dodge(width = 0.8), size = 4, color = "darkblue")
+  } else {
+    plot_with_labels <- plot +
+      geom_text(data = labelPAT36_sc_group_MAI, aes(x = Region, label = Percent, y = 60, vjust = 0,fontface = "bold"),
+                position = position_dodge(width = 0.8), size = 4, color = "darkblue")
+  }
+  
+  # Tampilkan plot
+  plot_with_labels
+  
+  # Menyimpan plot sebagai PNG
+  filename <- paste(sc_group,"_PAT36_MAI_ByYear.png", sep = "")
+  
+  # Menentukan ukuran plot berdasarkan kondisi SC_Grp
+  if (sc_group %in% c("ACRA Marine Clay", "EPEL Marine Clay", "AMAN Marine Clay")) {
+    plot_size <- c(5.5, 5.5)
+  } else {
+    plot_size <- c(13.75, 5.5)
+  }
+  
+  ggsave(filename, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+###BY SPECIES, BY OTHER SC, BY YEAR
+INVENT <- INVENTORY
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+INVENT <- INVENT %>% filter(Facet == "By Year", Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+
+###data coverage 
+COVERAGE <- PAT_COVERAGE
+COVERAGE <- COVERAGE %>% filter(Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+COVERAGE <- COVERAGE %>% filter(SC_Grp %in% c("ACRA Other SC","EPEL Other SC","AMAN Other SC"))
+COVERAGE <- COVERAGE %>% filter(is.na(Region))
+COVERAGE$SMF <- "Overall"
+
+
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("SMF", "PAT_Type","Period", "SC_Grp"), all.x = TRUE) 
+
+# Ubah Label menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent) 
+
+###ACRA, EPEL, AMAN PAT36 CAI
+create_and_save_plot <- function(data, sc_group, target_40T, target_SWS, filename, title) {
+  plot <- ggplot(data, aes(x = Period, y = MAITob, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, 60)) +
+    labs(x = "",
+         y = "MAI Tsob/ha/yr",
+         title = title)
+  
+  # Tambahkan geom_hline kecuali untuk AMAN Other SC
+  if (sc_group != "AMAN Other SC") {
+    plot <- plot +
+      geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+      geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5)
+  }
+  
+  # Tambahkan label pada setiap periode
+  sep <- distinct(merged_data, SMF, PAT_Type, Period, SC_Grp, .keep_all = TRUE)
+  label_data <- sep %>% filter(PAT_Type == "PAT36", SC_Grp == sc_group)
+  plot_with_labels <- plot +
+    geom_text(data = label_data, aes(x = Period, label = Percent, y = 60, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 4, color = "darkblue")
+  
+  # Tampilkan plot
+  plot_with_labels
+  
+  # Menyimpan plot sebagai PNG
+  ggsave(filename, plot_with_labels, width = 5.5, height = 5.5, dpi = 400)
+}
+
+# Data untuk ACRA
+PAT36_ACRA_OTHER <- INVENT %>% filter(PAT_Type == "PAT36", SC_Grp == "ACRA Other SC")
+create_and_save_plot(PAT36_ACRA_OTHER, "ACRA Other SC", "Target_40T_MAI_ACRA", "Target_SWS_MAI_ACRA",
+                     "OTHER SC_P36_MAI_ACRA_ByYear.png", "ACRA OTHER SC PAT36")
+
+# Data untuk EPEL
+PAT36_EPEL_OTHER <- INVENT %>% filter(PAT_Type == "PAT36", SC_Grp == "EPEL Other SC")
+create_and_save_plot(PAT36_EPEL_OTHER, "EPEL Other SC", "Target_40T_MAI_EPEL", "Target_SWS_MAI_EPEL",
+                     "OTHER SC_P36_MAI_EPEL_ByYear.png", "EPEL OTHER SC PAT36")
+
+# Data untuk AMAN
+PAT36_AMAN_OTHER <- INVENT %>% filter(PAT_Type == "PAT36", SC_Grp == "AMAN Other SC")
+create_and_save_plot(PAT36_AMAN_OTHER, "AMAN Other SC", "Target_40T_MAI_AMAN", "Target_SWS_MAI_AMAN",
+                     "OTHER SC_P36_MAI_AMAN_ByYear.png", "AMAN OTHER SC PAT36")
+
+###ACRA, EPEL, & AMAN PAT12 CAI
+create_and_save_plot <- function(data, sc_group, target_40T, target_SWS, filename, title, y_max, y_label) {
+  plot <- ggplot(data, aes(x = Period, y = CAI, fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = c(0, y_max)) +
+    labs(x = "",
+         y = y_label,
+         title = title)
+  
+  # Conditionally add geom_hline for all except "AMAN Other SC"
+  if (sc_group != "AMAN Other SC") {
+    plot <- plot +
+      geom_hline(aes(yintercept = !!as.name(target_40T)), color = "green", linetype = "dashed", size = 0.5) +
+      geom_hline(aes(yintercept = !!as.name(target_SWS)), color = "red", linetype = "solid", size = 0.5)
+  }
+  
+  # Tambahkan label pada setiap periode
+  sep <- distinct(merged_data, SMF, PAT_Type, Period, SC_Grp, .keep_all = TRUE)
+  label_data <- sep %>% filter(PAT_Type == "PAT12", SC_Grp == sc_group)
+  plot_with_labels <- plot +
+    geom_text(data = label_data, aes(x = Period, label = Percent, y = y_max, vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 4, color = "darkblue")
+  
+  # Tampilkan plot
+  plot_with_labels
+  
+  # Menyimpan plot sebagai PNG
+  ggsave(filename, plot_with_labels, width = 5.5, height = 5.5, dpi = 400)
+}
+
+# Data untuk ACRA, EPEL, dan AMAN
+PAT12_ACRA_OTHER <- INVENT %>% filter(PAT_Type == "PAT12", SC_Grp == "ACRA Other SC")
+create_and_save_plot(PAT12_ACRA_OTHER, "ACRA Other SC", "Target_40T_CAI_ACRA", "Target_SWS_CAI_ACRA",
+                     "OTHER SC_P12_CAI_ACRA_ByYear.png", "ACRA OTHER SC PAT12", 40, "CAI (m3/ha/yr)")
+
+PAT12_EPEL_OTHER <- INVENT %>% filter(PAT_Type == "PAT12", SC_Grp == "EPEL Other SC")
+create_and_save_plot(PAT12_EPEL_OTHER, "EPEL Other SC", "Target_40T_CAI_EPEL", "Target_SWS_CAI_EPEL",
+                     "OTHER SC_P12_CAI_EPEL_ByYear.png", "EPEL OTHER SC PAT12", 40, "CAI (m3/ha/yr)")
+
+PAT12_AMAN_OTHER <- INVENT %>% filter(PAT_Type == "PAT12", SC_Grp == "AMAN Other SC")
+create_and_save_plot(PAT12_AMAN_OTHER, "AMAN Other SC", "Target_40T_CAI_AMAN", "Target_SWS_CAI_AMAN",
+                     "OTHER SC_P12_CAI_AMAN_ByYear.png", "AMAN OTHER SC PAT12", 40, "CAI (m3/ha/yr)")
+
+
+
+
+#BY REGION, BY PERIOD YEAR
+INVENT <- INVENTORY
+
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+INVENT <- INVENT %>% filter(Facet == "By Year" & Species %in% c("ACRA","AMAN", "EPEL"))
+
+###data coverage 
+COVERAGE <- PAT_COVERAGE
+COVERAGE <- COVERAGE %>%
+  filter(is.na(Species) & is.na (SC_Grp) & is.na (SMF) & Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+COVERAGE$Region <- ifelse(COVERAGE$Region == "JAMBI WKS", "Jambi WKS", str_to_title(COVERAGE$Region))
+
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type","Period"), all.x = TRUE) 
+
+# Ubah Label menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent) 
+
+###GABUNG & PAT06 SCMH, HEIGHT, STOCKING
+create_pat06_plot <- function(data, y_value, y_label, y_limits, title, filename) {
+  plot <- ggplot(data, aes(x = Region, y = !!sym(y_value), fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Region Group",
+         y = y_label,
+         title = title)
+  
+  # Mengambil satu perwakilan dari setiap kombinasi unik untuk label
+  sep <- distinct(merged_data, Region, PAT_Type, Period, .keep_all = TRUE)
+  label_data <- sep %>% filter(PAT_Type == "PAT06")
+  
+  plot_with_labels <- plot +
+    geom_text(data = label_data, aes(x = Region, label = Percent, y = y_limits[2], vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue")
+  
+  # Tampilkan plot
+  print(plot_with_labels)
+  
+  # Menyimpan plot sebagai PNG
+  ggsave(filename, plot_with_labels, width = 13.398, height = 5.56, dpi = 400)
+}
+
+# Data untuk PAT06
+PAT06_GABUNG <- INVENT %>% filter(PAT_Type == "PAT06")
+
+# Plot for SCMH
+create_pat06_plot(PAT06_GABUNG, "SCMH", "Stocking X MH", c(0, 5),
+                  "PAT06 Stocking X Mean Height Overall Jan20 - Jan25", "P06_SCMH_Overall_ByYear.png")
+
+# Plot for Height
+create_pat06_plot(PAT06_GABUNG, "MH", "Height (m)", c(0, 5),
+                  "PAT06 Height Overall Jan20 - Jan25", "P06_HEIGHT_Overall_ByYear.png")
+
+# Plot for Stocking
+create_pat06_plot(PAT06_GABUNG, "Stocking", "Stocking (%)", c(80, 120),
+                  "PAT06 Stocking Overall Jan20 - Jan25", "P06_STOCKING_Overall_ByYear.png")
+
+
+###GABUNG & PAT12
+PAT12_GABUNG <- INVENT %>% filter(PAT_Type == "PAT12",)
+
+# Buat boxplot dengan label
+plot <- ggplot(PAT12_GABUNG, aes(x = Region, y = CAI, fill = Period)) +
+  geom_boxplot(width = 0.5) +
+  theme_bw() +
+  theme(legend.position = "",
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size = 16)) +
+  scale_y_continuous(limits = c(0, 40)) +
+  labs(x = "Region Group",
+       y = "CAI (m3/ha/year)",
+       title = "PAT12 CAI (m3/ha/year) Overall Jan20 - Jan25")
+
+# Tambahkan label pada setiap periode
+# Mengambil satu perwakilan dari setiap kombinasi unik
+sep <- distinct(merged_data, Region, PAT_Type, Period,.keep_all = TRUE)
+labelPAT12_GABUNG <- sep %>% filter(PAT_Type == "PAT12", )
+plot_with_labels <- plot +
+  geom_text(data = labelPAT12_GABUNG, aes(x = Region, label = Percent, y = 40, vjust = 0,fontface = "bold"),
+            position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+
+# Tampilkan plot
+plot_with_labels
+
+# Menentukan ukuran plot
+plot_size <- c(13.398, 5.56)  # Ukuran dalam satuan inchi
+
+# Menyimpan plot sebagai PNG
+ggsave("P12_CAI_Overall_ByYear.png", width = plot_size[1], height = plot_size[2], dpi = 400)
+
+INVENT <- INVENTORY
+INVENT <- INVENT %>% filter(Facet == "By Year", Species %in% c("ACRA", "AMAN", "EPEL"), 
+                            Period %in% c("Y2020", "Y2021", "Y2022", "Y2023", "Y2024","Y2025"))
+INVENT$Region <- factor(INVENT$Region, levels = c("Riau", "Jambi WKS", "Muba", "Palembang", "Kalbar", "Kaltim", "Kalteng"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020", "Y2021", "Y2022", "Y2023", "Y2024","Y2025"))
+
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type", "Period"), all.x = TRUE)
+
+### GABUNG & PAT36
+PAT36_GABUNG <- INVENT %>% filter(PAT_Type == "PAT36")
+
+# Create boxplot
+plot <- ggplot(PAT36_GABUNG, aes(x = Region, y = MAITob, fill = Period)) +
+  geom_boxplot(width = 0.5) +
+  theme_bw() +
+  theme(legend.position = "",
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size = 16)) +
+  scale_y_continuous(limits = c(0, 60)) +
+  labs(x = "Region Group",
+       y = "MAI Tsob/ha/yr",
+       title = "PAT36 MAI (Tsob/ha/yr) Overall Jan20 - Jan25")
+
+# Add labels to the plot
+sep <- distinct(merged_data, Region, PAT_Type, Period, .keep_all = TRUE)
+labelPAT36_GABUNG <- sep %>% filter(PAT_Type == "PAT36")
+plot_with_labels <- plot +
+  geom_text(data = labelPAT36_GABUNG, aes(x = Region, label = Percent, y = 60, vjust = 0, fontface = "bold"),
+            position = position_dodge(width = 0.8), size = 3, color = "darkblue", fontface = "bold")
+
+# Display the plot with labels
+plot_with_labels
+
+# Save the plot as PNG
+plot_size <- c(13.398, 5.56)  # Size in inches
+ggsave("P36_MAI_Overall_ByYear.png", width = plot_size[1], height = plot_size[2], dpi = 400)
+
+
+#BY OVERALL, ALL SPECIES
+INVENT <- INVENTORY
+INVENT <- INVENT %>% filter(Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025")) 
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+INVENT <- INVENT %>% filter(Facet == "By Year" & Species %in% c("ACRA","AMAN", "EPEL"))
+
+###data coverage 
+COVERAGE <- PAT_COVERAGE
+COVERAGE <- COVERAGE %>%
+  filter(is.na(Species) & is.na (SC_Grp) & is.na (Region) & Period %in% c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("PAT_Type","Period"), all.x = TRUE) 
+
+# Ubah Label menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent) 
+
+#OVERALL
+###GABUNG & PAT36
+PAT36_OVERALL_GABUNG <- INVENT %>% filter(PAT_Type == "PAT36",)
+
+# Buat boxplot dengan label
+plot <- ggplot(PAT36_OVERALL_GABUNG, aes(Period, MAITob, fill = Period)) +
+  geom_boxplot(width = 0.5) +
+  theme_bw() +
+  theme(legend.position = "",
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size = 16)) +
+  scale_y_continuous(limits = c(0, 60)) +
+  labs(x = "",
+       y = "MAI Tsob/ha/yr",
+       title = "OVERALL PAT36")
+
+# Tambahkan label pada setiap periode
+# Mengambil satu perwakilan dari setiap kombinasi unik
+sep <- distinct(merged_data, PAT_Type, Period,.keep_all = TRUE)
+labelPAT36_GABUNG_Overall <- sep %>% filter(PAT_Type == "PAT36")
+plot_with_labels <- plot +
+  geom_text(data = labelPAT36_GABUNG_Overall, aes(x = Period, label = Percent, y = 60, vjust = 0,fontface = "bold"),
+            position = position_dodge(width = 0.8), size = 3.3, color = "darkblue", fontface = "bold")
+
+# Tampilkan plot
+plot_with_labels
+
+# Menentukan ukuran plot
+plot_size <- c(5.5, 5.5)  # Ukuran dalam satuan inchi
+
+# Menyimpan plot sebagai PNG
+ggsave("OVERALL_P36_MAI_ByYear.png", width = plot_size[1], height = plot_size[2], dpi = 400)
+
+INVENT <- INVENTORY
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025"))
+INVENT <- INVENT %>% filter(Facet == "By Year" & Species %in% c("ACRA","AMAN", "EPEL"))
+merged_data <- merge(INVENT, COVERAGE, by = c("PAT_Type","Period"), all.x = TRUE) 
+
+#OVERALL
+###GABUNG & PAT12
+PAT12_OVERALL_GABUNG <- INVENT %>% filter(PAT_Type == "PAT12",)
+
+# Buat boxplot dengan label
+plot <- ggplot(PAT12_OVERALL_GABUNG, aes(Period, CAI, fill = Period)) +
+  geom_boxplot(width = 0.5) +
+  theme_bw() +
+  theme(legend.position = "",
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size = 16)) +
+  scale_y_continuous(limits = c(0, 40)) +
+  labs(x = "",
+       y = "CAI (m3/ha/yr)",
+       title = "OVERALL PAT12")
+
+# Tambahkan label pada setiap periode
+# Mengambil satu perwakilan dari setiap kombinasi unik
+sep <- distinct(merged_data, PAT_Type, Period, .keep_all = TRUE)
+labelPAT12_GABUNG_Overall <- sep %>% filter(PAT_Type == "PAT12",)
+plot_with_labels <- plot +
+  geom_text(data = labelPAT12_GABUNG_Overall, aes(x = Period, label = Percent, y = 40, vjust = 0,fontface = "bold"),
+            position = position_dodge(width = 0.8), size = 4, color = "darkblue", fontface = "bold")
+
+# Tampilkan plot
+plot_with_labels
+
+# Menentukan ukuran plot
+plot_size <- c(5.5, 5.5)  # Ukuran dalam satuan inchi
+
+# Menyimpan plot sebagai PNG
+ggsave("OVERALL_P12_CAI_ByYear.png", width = plot_size[1], height = plot_size[2], dpi = 400)
+
+
+#OVERALL
+###GABUNG & PAT06 SCMH, HEIGHT, STOCKING
+PAT06_OVERALL_GABUNG <- INVENT %>% filter(PAT_Type == "PAT06")
+
+# Function to create and save plots
+create_and_save_plot <- function(data, y_var, y_label, y_limits, filename, title) {
+  plot <- ggplot(data, aes(Period, !!as.name(y_var), fill = Period)) +
+    geom_boxplot(width = 0.5) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Period",
+         y = y_label,
+         title = title)
+  
+  # Add labels
+  sep <- distinct(merged_data, PAT_Type, Period, .keep_all = TRUE)
+  label_data <- sep %>% filter(PAT_Type == "PAT06")
+  plot_with_labels <- plot +
+    geom_text(data = label_data, aes(x = Period, label = Percent, y = y_limits[2], vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 3.3, color = "darkblue")
+  
+  # Show and save plot
+  plot_with_labels
+  ggsave(filename, plot_with_labels, width = 5.5, height = 5.5, dpi = 400)
+}
+
+# SCMH Plot
+create_and_save_plot(PAT06_OVERALL_GABUNG, "SCMH", "Stocking x MH", c(0, 5), "OVERALL_P06_SCMH_ByYear.png", "OVERALL PAT06")
+
+# MH Plot
+create_and_save_plot(PAT06_OVERALL_GABUNG, "MH", "Height (m)", c(0, 5), "OVERALL_P06_HEIGHT_ByYear.png", "OVERALL PAT06")
+
+# Stocking Plot
+create_and_save_plot(PAT06_OVERALL_GABUNG, "Stocking", "Stocking (%)", c(80, 120), "OVERALL_P06_STOCKING_ByYear.png", "OVERALL PAT06")
+
+
+
+#OVERALL SPECIES BY MONTH
+INVENT <- INVENTORY
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025","Jan24","Feb24","Mar24",
+                                                  "Apr24","May24","Jun24","Jul24","Aug24","Sep24","Oct24","Nov24","Dec24","Jan25"))
+INVENT <- INVENT %>% filter(Species %in% c("ACRA","AMAN", "EPEL"))
+
+#UBAH PERIOD#
+INVENT <- INVENT %>% filter(!(Period %in% c("Jan24"))) 
+
+###data coverage 
+COVERAGE <- PAT_COVERAGE
+COVERAGE <- COVERAGE %>%
+  filter(is.na(Species) & is.na (SC_Grp) & is.na (SMF))
+COVERAGE$Region <- ifelse(COVERAGE$Region == "JAMBI WKS", "Jambi WKS", str_to_title(COVERAGE$Region))
+#UBAH PERIOD#
+COVERAGE <- COVERAGE %>% filter(!(Period %in% c("Jan24"))) 
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("Region", "PAT_Type","Period"), all.x = TRUE) 
+
+# Ubah Label menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent) 
+
+
+##GABUNG & PAT06 SCMH, HEIGHT, STOCKING
+PAT06_GABUNG <- INVENT %>% filter(PAT_Type == "PAT06")
+
+create_and_save_plot <- function(data, y_var, y_label, y_limits, filename, title) {
+  plot <- ggplot(data, aes(x = Region, y = !!as.name(y_var), fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "",
+          plot.title = element_text(hjust = 0.5),
+          text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Region Group",
+         y = y_label,
+         title = title)
+  
+  # Determine plot size
+  plot_size <- c(25.8, 6)  # Size in inches
+  
+  # Save plot
+  ggsave(filename, plot, width = plot_size[1], height = plot_size[2], dpi = 400)
+}
+
+# Generate and save plots for SCMH, MH, and Stocking
+create_and_save_plot(PAT06_GABUNG, "SCMH", "Stocking x MH", c(0, 5), "P06_SCMH_Overall_ByMonth.png", "PAT06 Stocking x Mean Height Overall Jan20 - Jan25")
+
+create_and_save_plot(PAT06_GABUNG, "MH", "Height (m)", c(0, 5), "P06_MH_Overall_ByMonth.png", "PAT06 Height Overall Jan20 - Jan25")
+
+create_and_save_plot(PAT06_GABUNG, "Stocking", "Stocking (%)", c(80, 120), "P06_Stocking_Overall_ByMonth.png", "PAT06 Stocking Overall Jan20 - Jan25")
+
+
+###GABUNG & PAT12
+PAT12_GABUNG <- INVENT %>% filter(PAT_Type == "PAT12")
+
+# Buat boxplot dengan label
+plot <- ggplot(PAT12_GABUNG, aes(x = Region, y = CAI, fill = Period)) +
+  geom_boxplot(width = 0.8) +
+  theme_bw() +
+  theme(legend.position = "",
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size = 16)) +
+  scale_y_continuous(limits = c(0, 40)) +
+  labs(x = "Region Group",
+       y = "CAI (m3/ha/year)",
+       title = "PAT12 CAI (m3/ha/year) Overall Jan20 - Jan25")
+
+
+# Menentukan ukuran plot
+plot_size <- c(25.8, 6)  # Ukuran dalam satuan inchi
+
+# Menyimpan plot sebagai PNG
+ggsave("P12_CAI_Overall_ByMonth.png", width = plot_size[1], height = plot_size[2], dpi = 400)
+
+###data 
+INVENT <- INVENTORY
+
+INVENT$Region <- factor(INVENT$Region , levels = c("Riau","Jambi WKS","Muba","Palembang","Kalbar","Kaltim","Kalteng"))
+#UBAH PERIOD#
+INVENT$Period <- factor(INVENT$Period, levels = c("Y2020","Y2021","Y2022","Y2023","Y2024","Y2025","Jan24","Feb24","Mar24",
+                                                  "Apr24","May24","Jun24","Jul24","Aug24","Sep24","Oct24","Nov24","Dec24","Jan25"))
+INVENT$Facet <- factor(INVENT$Facet , levels = c("By Year","By Month"))
+INVENT <- INVENT %>% filter(Species %in% c("ACRA","AMAN", "EPEL"))
+#UBAH PERIOD#
+INVENT <- INVENT %>% filter(!(Period %in% c("Jan24"))) 
+
+
+###data coverage 
+COVERAGE <- PAT_COVERAGE
+
+COVERAGE <- COVERAGE %>%
+  filter(is.na(Species) & is.na (SC_Grp) & is.na (Region))
+COVERAGE$SMF <- "Overall"
+#UBAH PERIOD#
+COVERAGE <- COVERAGE %>% filter(!(Period %in% c("Jan24"))) 
+# Merge data label dengan data boxplot
+merged_data <- merge(INVENT, COVERAGE, by = c("SMF", "PAT_Type","Period"), all.x = TRUE) 
+
+# Ubah Label menjadi faktor
+merged_data$Percent <- factor(merged_data$Percent) 
+
+#OVERALL
+###GABUNG & PAT12
+PAT12_OVERALL_GABUNG <- INVENT %>% filter(PAT_Type == "PAT12",)
+
+# Buat boxplot dengan label
+plot <- ggplot(PAT12_OVERALL_GABUNG, aes(Period, CAI, fill = Period)) +
+  geom_boxplot(width = 0.8) +
+  theme_bw() +
+  theme(legend.position = "",
+        plot.title = element_text(hjust = 0.5),
+        text = element_text(size = 16)) +
+  scale_y_continuous(limits = c(0, 40)) +
+  labs(x = "",
+       y = "CAI (m3/ha/yr)",
+       title = "OVERALL PAT12")
+
+# Tambahkan label pada setiap periode
+# Mengambil satu perwakilan dari setiap kombinasi unik
+sep <- distinct(merged_data, SMF, PAT_Type, Period, .keep_all = TRUE)
+labelPAT12_GABUNG_Overall <- sep %>% filter(PAT_Type == "PAT12",)
+plot_with_labels <- plot +
+  geom_text(data = labelPAT12_GABUNG_Overall, aes(x = Period, label = Percent, y = 40, vjust = 0,fontface = "bold"),
+            position = position_dodge(width = 0.8), size = 4, color = "darkblue", fontface = "bold")
+
+# Tampilkan plot
+plot_with_labels
+
+
+# Menentukan ukuran plot
+plot_size <- c(12.38, 6)  # Ukuran dalam satuan inchi
+
+# Menyimpan plot sebagai PNG
+ggsave("P12_CAI_Overall_ByMonth_ALL SPECIES.png", width = plot_size[1], height = plot_size[2], dpi = 400)
+
+
+#OVERALL
+###GABUNG & PAT06 SCMH, HEIGHT, STOCKING
+PAT06_OVERALL_GABUNG <- INVENT %>% filter(PAT_Type == "PAT06")
+
+# Fungsi untuk membuat dan menyimpan plot
+create_plot <- function(data, y_var, y_label, y_limits, title, file_name) {
+  plot <- ggplot(data, aes(Period, !!sym(y_var), fill = Period)) +
+    geom_boxplot(width = 0.8) +
+    theme_bw() +
+    theme(legend.position = "", plot.title = element_text(hjust = 0.5), text = element_text(size = 16)) +
+    scale_y_continuous(limits = y_limits) +
+    labs(x = "Period", y = y_label, title = title) +
+    geom_text(data = labelPAT06_GABUNG_Overall, aes(x = Period, label = Percent, y = y_limits[2], vjust = 0, fontface = "bold"),
+              position = position_dodge(width = 0.8), size = 4, color = "darkblue", fontface = "bold")
+  
+  ggsave(file_name, plot = plot, width = 12.38, height = 6, dpi = 400)
+}
+
+# Filter data untuk label
+labelPAT06_GABUNG_Overall <- merged_data %>% distinct(SMF, PAT_Type, Period, .keep_all = TRUE) %>% filter(PAT_Type == "PAT06")
+
+# Buat dan simpan semua plot
+create_plot(PAT06_OVERALL_GABUNG, "SCMH", "Stocking x MH", c(0, 5), "SCMH OVERALL PAT06", "P06_SCMH_Overall_ByMonth_ALL SPECIES.png")
+create_plot(PAT06_OVERALL_GABUNG, "MH", "Height (m)", c(0, 5), "MH OVERALL PAT06", "P06_MH_Overall_ByMonth_ALL SPECIES.png")
+create_plot(PAT06_OVERALL_GABUNG, "Stocking", "Stocking (%)", c(80, 120), "Stocking OVERALL PAT06", "P06_Stocking_Overall_ByMonth_ALL SPECIES.png")
+
+
+library(officer)
+
+# Membaca template PPT
+ppt <- read_pptx(normalizePath("C:/Users/00029641/OneDrive - PT. Global Komunikasi Mandiri/Documents/MY FOLDER/SHARE DOCUMENTS/Plantation Productivity/202501/Template.pptx"))
+
+# Menambahkan gambar ke slide kedua
+ppt <- ppt %>%
+  on_slide(index = 2) %>% 
+  ph_with(external_img("OVERALL_PAT06_SCMH_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 2) %>% 
+  ph_with(external_img("OVERALL_PAT06_SCMH_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 2) %>% 
+  ph_with(external_img("P06_SCMH_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 2) %>% 
+  ph_with(external_img("P06_SCMH_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide ketiga
+ppt <- ppt %>%
+  on_slide(index = 3) %>% 
+  ph_with(external_img("P06_SCMH_ACRA_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 3) %>% 
+  ph_with(external_img("P06_SCMH_Overall_ACRA_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keempat
+ppt <- ppt %>%
+  on_slide(index = 4) %>% 
+  ph_with(external_img("P06_MH_ACRA_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 4) %>% 
+  ph_with(external_img("P06_MH_Overall_ACRA_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide kelima
+ppt <- ppt %>%
+  on_slide(index = 5) %>% 
+  ph_with(external_img("P06_Stocking_ACRA_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 5) %>% 
+  ph_with(external_img("P06_Stocking_Overall_ACRA_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keenam
+ppt <- ppt %>%
+  on_slide(index = 6) %>% 
+  ph_with(external_img("P06_SCMH_EPEL_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 6) %>% 
+  ph_with(external_img("P06_SCMH_Overall_EPEL_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketujuh
+ppt <- ppt %>%
+  on_slide(index = 7) %>% 
+  ph_with(external_img("P06_MH_EPEL_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 7) %>% 
+  ph_with(external_img("P06_MH_Overall_EPEL_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide kedelapan
+ppt <- ppt %>%
+  on_slide(index = 8) %>% 
+  ph_with(external_img("P06_Stocking_EPEL_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 8) %>% 
+  ph_with(external_img("P06_Stocking_Overall_EPEL_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide kesepuluh
+ppt <- ppt %>%
+  on_slide(index = 10) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_ACRA_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 10.63, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 10) %>% 
+  ph_with(external_img("OTHER SC_P12_CAI_ACRA_ByYear.png", height = 2.45, width = 2.45), 
+          location = ph_location(left = 8.32, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 10) %>% 
+  ph_with(external_img("ACRA Marine Clay_PAT12_CAI_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 6, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 10) %>% 
+  ph_with(external_img("ACRA SC VI-VII_PAT12_CAI_ByYear.png", height = 2.45, width = 6.13), 
+          location = ph_location(left = 0, top = 1.8, height = 2.45, width = 6.13))
+
+# Menambahkan gambar ke slide kesebelas
+ppt <- ppt %>%
+  on_slide(index = 11) %>% 
+  ph_with(external_img("P12_CAI_ACRA_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 11) %>% 
+  ph_with(external_img("P12_CAI_Overall_ACRA_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keduabelas
+ppt <- ppt %>%
+  on_slide(index = 12) %>% 
+  ph_with(external_img("P12_CAI_ACRA_ByMonth.png", height = 2.85, width = 12.78),
+          location = ph_location(left = 0.06, top = 1.17, height = 2.85, width = 12.78))
+
+ppt <- ppt %>%
+  on_slide(index = 12) %>% 
+  ph_with(external_img("P06_SCMH_ACRA_ByMonth.png", height = 2.85, width = 12.78), 
+          location = ph_location(left = 0.06, top = 3.87, height = 2.85, width = 12.78))
+
+# Menambahkan gambar ke slide ketigabelas
+ppt <- ppt %>%
+  on_slide(index = 13) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_EPEL_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 10.63, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 13) %>% 
+  ph_with(external_img("OTHER SC_P12_CAI_EPEL_ByYear.png", height = 2.45, width = 2.45), 
+          location = ph_location(left = 8.32, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 13) %>% 
+  ph_with(external_img("EPEL Marine Clay_PAT12_CAI_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 6, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 13) %>% 
+  ph_with(external_img("EPEL SC I-V_PAT12_CAI_ByYear.png", height = 2.45, width = 6.13), 
+          location = ph_location(left = 0, top = 1.8, height = 2.45, width = 6.13))
+
+# Menambahkan gambar ke slide keempatbelas
+ppt <- ppt %>%
+  on_slide(index = 14) %>% 
+  ph_with(external_img("P12_CAI_EPEL_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 14) %>% 
+  ph_with(external_img("P12_CAI_Overall_EPEL_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide kelimabelas
+ppt <- ppt %>%
+  on_slide(index = 15) %>% 
+  ph_with(external_img("P12_CAI_EPEL_ByMonth.png", height = 2.85, width = 12.78),
+          location = ph_location(left = 0.06, top = 1.17, height = 2.85, width = 12.78))
+
+ppt <- ppt %>%
+  on_slide(index = 15) %>% 
+  ph_with(external_img("P06_SCMH_EPEL_ByMonth.png", height = 2.85, width = 12.78), 
+          location = ph_location(left = 0.06, top = 3.87, height = 2.85, width = 12.78))
+
+# Menambahkan gambar ke slide ketujuhbelas
+ppt <- ppt %>%
+  on_slide(index = 17) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_ACRA_ByYear1.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 10.63, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 17) %>% 
+  ph_with(external_img("OTHER SC_P36_MAI_ACRA_ByYear.png", height = 2.45, width = 2.45), 
+          location = ph_location(left = 8.32, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 17) %>% 
+  ph_with(external_img("ACRA Marine Clay_PAT36_MAI_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 6, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 17) %>% 
+  ph_with(external_img("ACRA SC VI-VII_PAT36_MAI_ByYear.png", height = 2.45, width = 6.13), 
+          location = ph_location(left = 0, top = 1.8, height = 2.45, width = 6.13))
+
+# Menambahkan gambar ke slide kedelapanbelas
+ppt <- ppt %>%
+  on_slide(index = 18) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 18) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_ACRA_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 18) %>% 
+  ph_with(external_img("P36_MAI_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 18) %>% 
+  ph_with(external_img("P12_CAI_ACRA_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide kesembilanbelas
+ppt <- ppt %>%
+  on_slide(index = 19) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_EPEL_ByYear1.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 10.63, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 19) %>% 
+  ph_with(external_img("OTHER SC_P36_MAI_EPEL_ByYear.png", height = 2.45, width = 2.45), 
+          location = ph_location(left = 8.32, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 19) %>% 
+  ph_with(external_img("EPEL Marine Clay_PAT36_MAI_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 6, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 19) %>% 
+  ph_with(external_img("EPEL SC I-V_PAT36_MAI_ByYear.png", height = 2.45, width = 6.13), 
+          location = ph_location(left = 0, top = 1.8, height = 2.45, width = 6.13))
+
+# Menambahkan gambar ke slide keduapuluh
+ppt <- ppt %>%
+  on_slide(index = 20) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_EPEL_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 20) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 20) %>% 
+  ph_with(external_img("P36_MAI_EPEL_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 20) %>% 
+  ph_with(external_img("P12_CAI_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keduapuluhdua
+ppt <- ppt %>%
+  on_slide(index = 22) %>% 
+  ph_with(external_img("OVERALL_PAT06_SCMH_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 22) %>% 
+  ph_with(external_img("OVERALL_PAT06_SCMH_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 22) %>% 
+  ph_with(external_img("P06_SCMH_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 22) %>% 
+  ph_with(external_img("P06_SCMH_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keduapuluhtiga
+ppt <- ppt %>%
+  on_slide(index = 23) %>% 
+  ph_with(external_img("OVERALL_PAT06_SCMH_AMAN_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 23) %>% 
+  ph_with(external_img("OVERALL_P06_SCMH_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 23) %>% 
+  ph_with(external_img("P06_SCMH_AMAN_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 23) %>% 
+  ph_with(external_img("P06_SCMH_Overall_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keduapuluhempat
+ppt <- ppt %>%
+  on_slide(index = 24) %>% 
+  ph_with(external_img("P06_SCMH_AMAN_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 24) %>% 
+  ph_with(external_img("P06_SCMH_Overall_AMAN_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keduapuluhlima
+ppt <- ppt %>%
+  on_slide(index = 25) %>% 
+  ph_with(external_img("P06_SCMH_Overall_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 25) %>% 
+  ph_with(external_img("P06_SCMH_Overall_ByMonth_ALL SPECIES.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keduapuluhenam
+ppt <- ppt %>%
+  on_slide(index = 26) %>% 
+  ph_with(external_img("OVERALL_PAT06_Stocking_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 26) %>% 
+  ph_with(external_img("OVERALL_PAT06_Stocking_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 26) %>% 
+  ph_with(external_img("P06_STOCKING_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 26) %>% 
+  ph_with(external_img("P06_STOCKING_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keduapuluhtujuh
+ppt <- ppt %>%
+  on_slide(index = 27) %>% 
+  ph_with(external_img("OVERALL_PAT06_Stocking_AMAN_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 27) %>% 
+  ph_with(external_img("OVERALL_P06_STOCKING_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 27) %>% 
+  ph_with(external_img("P06_STOCKING_AMAN_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 27) %>% 
+  ph_with(external_img("P06_STOCKING_Overall_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keduapuluhdelapan
+ppt <- ppt %>%
+  on_slide(index = 28) %>% 
+  ph_with(external_img("P06_Stocking_ACRA_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 28) %>% 
+  ph_with(external_img("P06_Stocking_Overall_ACRA_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keduapuluhsembilan
+ppt <- ppt %>%
+  on_slide(index = 29) %>% 
+  ph_with(external_img("P06_Stocking_EPEL_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 29) %>% 
+  ph_with(external_img("P06_Stocking_Overall_EPEL_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluh
+ppt <- ppt %>%
+  on_slide(index = 30) %>% 
+  ph_with(external_img("P06_Stocking_AMAN_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 30) %>% 
+  ph_with(external_img("P06_Stocking_Overall_AMAN_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4 , height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluhsatu
+ppt <- ppt %>%
+  on_slide(index = 31) %>% 
+  ph_with(external_img("P06_Stocking_Overall_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 31) %>% 
+  ph_with(external_img("P06_Stocking_Overall_ByMonth_ALL SPECIES.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluhdua
+ppt <- ppt %>%
+  on_slide(index = 32) %>% 
+  ph_with(external_img("OVERALL_PAT06_MH_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 32) %>% 
+  ph_with(external_img("OVERALL_PAT06_MH_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 32) %>% 
+  ph_with(external_img("P06_MH_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 32) %>% 
+  ph_with(external_img("P06_MH_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+
+# Menambahkan gambar ke slide ketigapuluhtiga
+ppt <- ppt %>%
+  on_slide(index = 33) %>% 
+  ph_with(external_img("OVERALL_PAT06_MH_AMAN_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 33) %>% 
+  ph_with(external_img("OVERALL_P06_HEIGHT_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07 , height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 33) %>% 
+  ph_with(external_img("P06_MH_AMAN_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 33) %>% 
+  ph_with(external_img("P06_HEIGHT_Overall_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide ketigapuluhempat
+ppt <- ppt %>%
+  on_slide(index = 34) %>% 
+  ph_with(external_img("P06_MH_ACRA_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 34) %>% 
+  ph_with(external_img("P06_MH_Overall_ACRA_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluhlima
+ppt <- ppt %>%
+  on_slide(index = 35) %>% 
+  ph_with(external_img("P06_MH_EPEL_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 35) %>% 
+  ph_with(external_img("P06_MH_Overall_EPEL_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluhenam
+ppt <- ppt %>%
+  on_slide(index = 36) %>% 
+  ph_with(external_img("P06_MH_AMAN_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 36) %>% 
+  ph_with(external_img("P06_MH_Overall_AMAN_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluhtujuh
+ppt <- ppt %>%
+  on_slide(index = 37) %>% 
+  ph_with(external_img("P06_MH_Overall_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 37) %>% 
+  ph_with(external_img("P06_MH_Overall_ByMonth_ALL SPECIES.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide ketigapuluhdelapan
+ppt <- ppt %>%
+  on_slide(index = 38) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 38) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 38) %>% 
+  ph_with(external_img("P12_CAI_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 38) %>% 
+  ph_with(external_img("P12_CAI_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide ketigapuluhsembilan
+ppt <- ppt %>%
+  on_slide(index = 39) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_AMAN_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 39) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 39) %>% 
+  ph_with(external_img("P12_CAI_AMAN_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 39) %>% 
+  ph_with(external_img("P12_CAI_Overall_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keempatpuluh
+ppt <- ppt %>%
+  on_slide(index = 40) %>% 
+  ph_with(external_img("P12_CAI_AMAN_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 40) %>% 
+  ph_with(external_img("P12_CAI_Overall_AMAN_ByMonth.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keempatpuluhsatu
+ppt <- ppt %>%
+  on_slide(index = 41) %>% 
+  ph_with(external_img("P12_CAI_Overall_ByMonth.png", height = 3.03, width = 13.03),
+          location = ph_location(left = 0, top = 1.17, height = 3.03, width = 13.03))
+
+ppt <- ppt %>%
+  on_slide(index = 41) %>% 
+  ph_with(external_img("P12_CAI_Overall_ByMonth_ALL SPECIES.png", height = 2.38, width = 4.91), 
+          location = ph_location(left = 0, top = 4.4, height = 2.38, width = 4.91))
+
+# Menambahkan gambar ke slide keempatpuluhdua
+ppt <- ppt %>%
+  on_slide(index = 42) %>% 
+  ph_with(external_img("OVERALL_P12_CAI_AMAN_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 10.63, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 42) %>% 
+  ph_with(external_img("OTHER SC_P12_CAI_AMAN_ByYear.png", height = 2.45, width = 2.45), 
+          location = ph_location(left = 8.32, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 42) %>% 
+  ph_with(external_img("AMAN Marine Clay_PAT12_CAI_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 6, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 42) %>% 
+  ph_with(external_img("AMAN SC I-V_PAT12_CAI_ByYear.png", height = 2.45, width = 6.13), 
+          location = ph_location(left = 0, top = 1.8, height = 2.45, width = 6.13))
+
+
+# Menambahkan gambar ke slide keempatpuluhtiga
+ppt <- ppt %>%
+  on_slide(index = 43) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_ACRA_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 43) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_EPEL_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 43) %>% 
+  ph_with(external_img("P36_MAI_ACRA_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 43) %>% 
+  ph_with(external_img("P36_MAI_EPEL_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keempatpuluhempat
+ppt <- ppt %>%
+  on_slide(index = 44) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_AMAN_ByYear.png", height = 2.53, width = 2.53),
+          location = ph_location(left = 6.27, top = 1.4, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 44) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_ByYear.png", height = 2.53, width = 2.53), 
+          location = ph_location(left = 6.27, top = 4.07, height = 2.53, width = 2.53))
+
+ppt <- ppt %>%
+  on_slide(index = 44) %>% 
+  ph_with(external_img("P36_MAI_AMAN_ByYear.png", height = 2.53, width = 6.1),
+          location = ph_location(left = 0.3, top = 1.4, height = 2.53, width = 6.1))
+
+ppt <- ppt %>%
+  on_slide(index = 44) %>% 
+  ph_with(external_img("P36_MAI_Overall_ByYear.png", height = 2.53, width = 6.1), 
+          location = ph_location(left = 0.31, top = 4.07, height = 2.53, width = 6.1))
+
+# Menambahkan gambar ke slide keempatpuluhlima
+ppt <- ppt %>%
+  on_slide(index = 45) %>% 
+  ph_with(external_img("OVERALL_P36_MAI_AMAN_ByYear.png", height = 2.45, width = 2.45),
+          location = ph_location(left = 9.6, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 45) %>% 
+  ph_with(external_img("AMAN Marine Clay_PAT36_MAI_ByYear.png", height = 2.45, width = 2.45), 
+          location = ph_location(left = 7.28, top = 1.8, height = 2.45, width = 2.45))
+
+ppt <- ppt %>%
+  on_slide(index = 45) %>% 
+  ph_with(external_img("AMAN SC I-V_PAT36_MAI_ByYear.png", height = 2.45, width = 6.13),
+          location = ph_location(left = 1.28, top = 1.8, height = 2.45, width = 6.13))
+
+
+# Simpan PowerPoint dengan modifikasi
+print(ppt, target = "Grafik January25.pptx")
+
